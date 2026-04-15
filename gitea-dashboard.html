@@ -1,0 +1,505 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Gitea Actions Dashboard</title>
+  <style>
+    :root{
+      --bg:#0b1020;--panel:#131a2e;--panel2:#1a223a;--text:#e8ecf3;--muted:#9aa7bd;
+      --ok:#22c55e;--fail:#ef4444;--run:#3b82f6;--queue:#a855f7;--warn:#f59e0b;
+      --border:#2a3558;--chip:#243158;--link:#93c5fd;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;background:linear-gradient(180deg,#0a0f1d,#0c1222);color:var(--text);font:14px/1.45 Inter,system-ui,sans-serif}
+    .wrap{max-width:1300px;margin:0 auto;padding:20px}
+    h1{margin:0 0 4px;font-size:1.55rem}
+    .sub{color:var(--muted);margin-bottom:12px}
+    .panel{background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid var(--border);border-radius:14px;padding:14px}
+    .controls{display:grid;grid-template-columns:170px 1.35fr 1fr 140px 120px 160px auto;gap:10px;align-items:end}
+    .field label{display:block;color:var(--muted);font-size:.83rem;margin-bottom:6px}
+    input,select,textarea{width:100%;background:#0f1529;color:var(--text);border:1px solid #2b3760;border-radius:10px;padding:10px 12px;outline:none}
+    input:focus,select:focus,textarea:focus{border-color:#4f6ecf;box-shadow:0 0 0 3px rgba(79,110,207,.25)}
+    textarea{min-height:76px;resize:vertical}
+    .btn{border:1px solid #3850a8;background:#1d3fa8;color:#fff;border-radius:10px;padding:10px 14px;cursor:pointer;font-weight:600}
+    .btn.secondary{background:#1b2440;border-color:#2f3d65}
+    .btn.ghost{background:#0f1529;border-color:#2f3d65}
+    .btn.small{padding:6px 10px;font-size:.82rem}
+    .btn:disabled{opacity:.6;cursor:not-allowed}
+    .row{display:grid;grid-template-columns:1fr auto auto;gap:10px;margin-top:10px}
+    .summary{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:10px;margin:12px 0}
+    .stat{background:#0f1529;border:1px solid #29345a;border-radius:12px;padding:10px}
+    .k{color:var(--muted);font-size:.78rem}.v{font-size:1.2rem;font-weight:700}
+    .v.ok{color:var(--ok)} .v.fail{color:var(--fail)} .v.run{color:var(--run)} .v.queue{color:var(--queue)}
+    .table{overflow:auto;border:1px solid var(--border);border-radius:12px}
+    table{width:100%;border-collapse:collapse;min-width:1120px;background:#0d1325}
+    th,td{padding:10px 12px;border-bottom:1px solid #222d52;text-align:left;vertical-align:top}
+    th{background:#121a31;color:#b8c4d9;position:sticky;top:0;z-index:1}
+    tr:hover td{background:#111a33}
+    .expand-row td{background:#0b1225 !important}
+    .chip{display:inline-flex;align-items:center;gap:6px;font-size:.78rem;padding:4px 8px;border-radius:999px;background:var(--chip);border:1px solid #33406d;text-transform:lowercase}
+    .dot{width:8px;height:8px;border-radius:50%}
+    .status-success .dot{background:var(--ok)}
+    .status-failure .dot{background:var(--fail)}
+    .status-in_progress .dot{background:var(--run)}
+    .status-queued .dot,.status-pending .dot{background:var(--queue)}
+    .status-cancelled .dot{background:var(--warn)}
+    .status-skipped .dot{background:#9ca3af}
+    .status-unknown .dot{background:#64748b}
+    .link{color:var(--link);text-decoration:none}.link:hover{text-decoration:underline}
+    .muted{color:var(--muted)}
+    .error{display:none;margin-top:10px;color:#fecaca;background:#3b1318;border:1px solid #7f1d1d;border-radius:10px;padding:10px;white-space:pre-wrap}
+    .warn{display:none;margin-top:10px;color:#fde68a;background:#3f2e08;border:1px solid #92400e;border-radius:10px;padding:10px}
+    .footer{margin-top:10px;color:var(--muted);display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
+    .older{margin-top:6px;border:1px solid #2a3558;border-radius:10px;overflow:hidden}
+    .older table{min-width:100%;background:#0b1222}
+    .older th,.older td{padding:8px 10px;font-size:.9em}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+    .hidden{display:none!important}
+    @media (max-width:1100px){.controls{grid-template-columns:1fr 1fr 1fr 140px}.summary{grid-template-columns:repeat(4,minmax(0,1fr))}}
+    @media (max-width:700px){.controls,.row{grid-template-columns:1fr}.summary{grid-template-columns:repeat(2,minmax(0,1fr))}}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Gitea Actions Dashboard</h1>
+  <div class="sub">One row per repo (latest run), expandable older runs of the same workflow.</div>
+
+  <section class="panel">
+    <div class="controls">
+      <div class="field">
+        <label for="mode">Mode</label>
+        <select id="mode">
+          <option value="proxy" selected>Proxy (launcher.py)</option>
+          <option value="direct">Direct (Go Live)</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="apiBase">API Base URL</label>
+        <input id="apiBase" value="http://127.0.0.1:8765/gitea" />
+      </div>
+      <div class="field">
+        <label for="uiBase">Gitea UI URL</label>
+        <input id="uiBase" value="http://localhost:3000" />
+      </div>
+      <div class="field">
+        <label for="interval">Refresh (s)</label>
+        <select id="interval"><option>5</option><option selected>10</option><option>15</option><option>30</option><option>60</option></select>
+      </div>
+      <div class="field">
+        <label for="limit">Runs/repo</label>
+        <select id="limit"><option>10</option><option selected>20</option><option>50</option></select>
+      </div>
+      <div class="field">
+        <label for="filter">Filter</label>
+        <select id="filter">
+          <option value="all" selected>All</option>
+          <option value="failed">Failed only</option>
+          <option value="running">Running/Queued only</option>
+        </select>
+      </div>
+      <button class="btn" id="refreshBtn">Refresh</button>
+    </div>
+
+    <div class="field" id="tokenWrap" style="margin-top:10px">
+      <label for="token">Token (Direct mode only)</label>
+      <input id="token" type="password" placeholder="Required only in Direct mode" />
+      <div class="muted" style="font-size:.82rem;margin-top:5px">
+        Proxy mode reads token from <span class="mono">token.txt</span>.
+      </div>
+    </div>
+
+    <div id="modeNote" class="warn"></div>
+
+    <div class="row">
+      <div class="field">
+        <label for="repos">Repositories (owner/repo, one per line). Leave empty for auto-discovery.</label>
+        <textarea id="repos" placeholder="Leave empty to auto-discover via /api/v1/user/repos"></textarea>
+      </div>
+      <button class="btn ghost" id="discoverBtn">Auto-discover</button>
+      <button class="btn secondary" id="togglePollBtn">Pause Auto-Refresh</button>
+    </div>
+
+    <div class="summary" id="summary"></div>
+
+    <div class="table">
+      <table>
+        <thead>
+          <tr>
+            <th>Repo</th>
+            <th>Workflow (latest)</th>
+            <th>Status</th>
+            <th>Branch</th>
+            <th>Event</th>
+            <th>Actor</th>
+            <th>Started</th>
+            <th>Duration</th>
+            <th>Run</th>
+            <th>Expand</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+
+    <div id="error" class="error"></div>
+    <div class="footer">
+      <span id="lastUpdated">Last updated: never</span>
+      <span id="repoSource">Repo source: manual/empty</span>
+    </div>
+  </section>
+</div>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const modeEl = $("mode"), apiBaseEl = $("apiBase"), uiBaseEl = $("uiBase"), tokenEl = $("token"),
+        intervalEl = $("interval"), limitEl = $("limit"), filterEl = $("filter"),
+        reposEl = $("repos"), refreshBtn = $("refreshBtn"), discoverBtn = $("discoverBtn"),
+        togglePollBtn = $("togglePollBtn"), rowsEl = $("rows"), summaryEl = $("summary"),
+        errorEl = $("error"), lastUpdatedEl = $("lastUpdated"), repoSourceEl = $("repoSource"),
+        tokenWrapEl = $("tokenWrap"), modeNoteEl = $("modeNote");
+
+  let polling = true;
+  let timer = null;
+  const expanded = new Set();
+
+  const statusOrder = ["failure","cancelled","in_progress","queued","pending","skipped","success","unknown"];
+  const toStatus = s => (s || "unknown").toLowerCase();
+  const isFailed = s => ["failure","cancelled"].includes(s);
+  const isRunning = s => ["in_progress","queued","pending"].includes(s);
+
+  function save(){
+    localStorage.setItem("giteaDashExpandV2", JSON.stringify({
+      mode: modeEl.value, apiBase: apiBaseEl.value.trim(), uiBase: uiBaseEl.value.trim(),
+      token: tokenEl.value, interval: intervalEl.value, limit: limitEl.value,
+      filter: filterEl.value, repos: reposEl.value
+    }));
+  }
+
+  function load(){
+    const raw = localStorage.getItem("giteaDashExpandV2");
+    if(!raw) return;
+    try{
+      const s = JSON.parse(raw);
+      if(s.mode) modeEl.value = s.mode;
+      if(s.apiBase) apiBaseEl.value = s.apiBase;
+      if(s.uiBase) uiBaseEl.value = s.uiBase;
+      if(s.token) tokenEl.value = s.token;
+      if(s.interval) intervalEl.value = s.interval;
+      if(s.limit) limitEl.value = s.limit;
+      if(s.filter) filterEl.value = s.filter;
+      if(s.repos) reposEl.value = s.repos;
+    }catch{}
+  }
+
+  function updateModeUI(){
+    const proxy = modeEl.value === "proxy";
+    tokenWrapEl.classList.toggle("hidden", proxy);
+    modeNoteEl.style.display = "block";
+    if(proxy){
+      modeNoteEl.textContent = "Proxy mode: API Base should be http://127.0.0.1:8765/gitea";
+      if(!apiBaseEl.value.trim()) apiBaseEl.value = "http://127.0.0.1:8765/gitea";
+    }else{
+      modeNoteEl.textContent = "Direct mode: API Base should be http://localhost:3000. If CORS fails, switch to Proxy mode.";
+      if(!apiBaseEl.value.trim()) apiBaseEl.value = "http://localhost:3000";
+    }
+  }
+
+  function setError(msg=""){
+    errorEl.style.display = msg ? "block" : "none";
+    errorEl.textContent = msg;
+  }
+
+  function esc(s){ return String(s ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c])); }
+  function fmtDate(iso){ return iso ? new Date(iso).toLocaleString() : "-"; }
+  function fmtDuration(startIso, endIso){
+    if(!startIso) return "-";
+    const s = new Date(startIso).getTime();
+    const e = endIso ? new Date(endIso).getTime() : Date.now();
+    const sec = Math.max(0, Math.floor((e-s)/1000));
+    const h = Math.floor(sec/3600), m = Math.floor((sec%3600)/60), ss = sec%60;
+    return h ? `${h}h ${m}m ${ss}s` : `${m}m ${ss}s`;
+  }
+
+  function parseRepos(text){
+    return text.split("\n").map(x=>x.trim()).filter(Boolean).filter(x=>x.includes("/")).map(x=>{
+      const [owner, repo] = x.split("/");
+      return { owner: owner.trim(), repo: repo.trim(), full: `${owner.trim()}/${repo.trim()}` };
+    }).filter(x=>x.owner && x.repo);
+  }
+
+  function headers(){
+    if(modeEl.value === "proxy") return { "Accept":"application/json" };
+    return { "Accept":"application/json", "Authorization":`token ${tokenEl.value.trim()}` };
+  }
+
+  async function apiGet(url){
+    const res = await fetch(url, { headers: headers() });
+    if(!res.ok){
+      const txt = await res.text().catch(()=> "");
+      throw new Error(`${res.status} ${res.statusText} ${txt.slice(0,240)}`);
+    }
+    return res.json();
+  }
+
+  async function discoverRepos(){
+    const base = apiBaseEl.value.trim().replace(/\/+$/,"");
+    if(modeEl.value === "direct" && !tokenEl.value.trim()) throw new Error("Token required in Direct mode.");
+    const repos = [];
+    for(let page=1; page<=20; page++){
+      const data = await apiGet(`${base}/api/v1/user/repos?limit=100&page=${page}`);
+      if(!Array.isArray(data) || !data.length) break;
+      data.forEach(r => { if(r?.full_name) repos.push(r.full_name); });
+      if(data.length < 100) break;
+    }
+    repos.sort((a,b)=>a.localeCompare(b));
+    reposEl.value = repos.join("\n");
+    repoSourceEl.textContent = `Repo source: auto-discovery (${repos.length} repos)`;
+    save();
+  }
+
+  async function fetchRunsForRepo(base, owner, repo, limit, uiBase){
+    const data = await apiGet(`${base}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/runs?limit=${limit}&page=1`);
+    return (data.workflow_runs || []).map(run => ({
+      repo: `${owner}/${repo}`,
+      id: run.id,
+      workflowKey: String(run.workflow_id || run.workflow_name || run.name || run.path || "workflow"),
+      workflowName: run.workflow_name || run.name || run.display_title || `workflow ${run.workflow_id || ""}`.trim(),
+      status: toStatus(run.status || run.conclusion),
+      branch: run.head_branch || "-",
+      event: run.event || "-",
+      actor: run.actor?.login || run.triggering_actor?.login || "-",
+      startedAt: run.run_started_at || run.started_at || run.created_at || null,
+      completedAt: run.updated_at || null,
+      htmlUrl: run.html_url || `${uiBase}/${owner}/${repo}/actions/runs/${run.id}`
+    }));
+  }
+
+  function byNewest(a,b){ return new Date(b.startedAt||0) - new Date(a.startedAt||0); }
+
+  function buildRepoRows(allRuns){
+    const byRepo = new Map();
+    for(const r of allRuns){
+      if(!byRepo.has(r.repo)) byRepo.set(r.repo, []);
+      byRepo.get(r.repo).push(r);
+    }
+
+    const out = [];
+    for(const [repo, runs] of byRepo.entries()){
+      runs.sort(byNewest);
+      const latest = runs[0];
+      const older = runs.filter(r => r.workflowKey === latest.workflowKey && r.id !== latest.id).sort(byNewest);
+      out.push({ repo, latest, older });
+    }
+
+    out.sort((a,b) => {
+      const sa = statusOrder.indexOf(a.latest.status), sb = statusOrder.indexOf(b.latest.status);
+      const oa = sa===-1?999:sa, ob = sb===-1?999:sb;
+      if(oa!==ob) return oa-ob;
+      return byNewest(a.latest,b.latest);
+    });
+
+    return out;
+  }
+
+  function summarize(repoRows){
+    const c = { repos: repoRows.length, totalLatest: repoRows.length, success:0,failure:0,in_progress:0,queued:0,pending:0,cancelled:0 };
+    for(const rr of repoRows){
+      const s = rr.latest.status;
+      if(c[s] !== undefined) c[s]++;
+    }
+    return c;
+  }
+
+  function renderSummary(s){
+    summaryEl.innerHTML = `
+      <div class="stat"><div class="k">Repos shown</div><div class="v">${s.repos}</div></div>
+      <div class="stat"><div class="k">Latest rows</div><div class="v">${s.totalLatest}</div></div>
+      <div class="stat"><div class="k">Success</div><div class="v ok">${s.success}</div></div>
+      <div class="stat"><div class="k">Failures</div><div class="v fail">${s.failure}</div></div>
+      <div class="stat"><div class="k">In Progress</div><div class="v run">${s.in_progress}</div></div>
+      <div class="stat"><div class="k">Queued/Pending</div><div class="v queue">${s.queued+s.pending}</div></div>
+      <div class="stat"><div class="k">Cancelled</div><div class="v">${s.cancelled}</div></div>`;
+  }
+
+  function olderRowsHtml(older){
+    if(!older.length) return `<div class="muted" style="padding:8px 2px">No older runs for this workflow.</div>`;
+    return `
+      <div class="older">
+        <table>
+          <thead>
+            <tr>
+              <th>Workflow</th>
+              <th>Status</th>
+              <th>Branch</th>
+              <th>Actor</th>
+              <th>Started</th>
+              <th>Duration</th>
+              <th>Run</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${older.map(r => `
+              <tr>
+                <td>${esc(r.workflowName)} <span class="muted">#${r.id}</span></td>
+                <td><span class="chip status-${r.status}"><span class="dot"></span>${r.status}</span></td>
+                <td>${esc(r.branch)}</td>
+                <td>${esc(r.actor)}</td>
+                <td>${fmtDate(r.startedAt)}</td>
+                <td>${fmtDuration(r.startedAt, r.status==="in_progress" ? null : r.completedAt)}</td>
+                <td><a class="link" target="_blank" rel="noopener" href="${r.htmlUrl}">Open run ↗</a></td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      </div>`;
+  }
+
+  function applyRowFilter(repoRows){
+    const f = filterEl.value;
+    if(f==="failed") return repoRows.filter(rr => isFailed(rr.latest.status));
+    if(f==="running") return repoRows.filter(rr => isRunning(rr.latest.status));
+    return repoRows;
+  }
+
+  function renderRepoRows(repoRows){
+    rowsEl.innerHTML = "";
+    if(!repoRows.length){
+      rowsEl.innerHTML = `<tr><td colspan="10" class="muted">No repos/runs for this filter.</td></tr>`;
+      return;
+    }
+
+    for(const rr of repoRows){
+      const id = rr.repo.replace(/[^\w-]/g,"_");
+      const open = expanded.has(rr.repo);
+
+      const main = document.createElement("tr");
+      main.innerHTML = `
+        <td>${rr.repo}</td>
+        <td>${esc(rr.latest.workflowName)} <span class="muted">#${rr.latest.id}</span></td>
+        <td><span class="chip status-${rr.latest.status}"><span class="dot"></span>${rr.latest.status}</span></td>
+        <td>${esc(rr.latest.branch)}</td>
+        <td>${esc(rr.latest.event)}</td>
+        <td>${esc(rr.latest.actor)}</td>
+        <td>${fmtDate(rr.latest.startedAt)}</td>
+        <td>${fmtDuration(rr.latest.startedAt, rr.latest.status==="in_progress" ? null : rr.latest.completedAt)}</td>
+        <td><a class="link" target="_blank" rel="noopener" href="${rr.latest.htmlUrl}">Open run ↗</a></td>
+        <td><button class="btn small secondary" data-repo="${rr.repo}" data-eid="exp_${id}">${open ? "Collapse" : `Expand (${rr.older.length})`}</button></td>
+      `;
+      rowsEl.appendChild(main);
+
+      const exp = document.createElement("tr");
+      exp.className = "expand-row";
+      exp.id = `exp_${id}`;
+      exp.style.display = open ? "" : "none";
+      exp.innerHTML = `<td colspan="10">${olderRowsHtml(rr.older)}</td>`;
+      rowsEl.appendChild(exp);
+    }
+
+    rowsEl.querySelectorAll("button[data-eid]").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const repo = btn.getAttribute("data-repo");
+        const eid = btn.getAttribute("data-eid");
+        const tr = document.getElementById(eid);
+        if(!tr) return;
+
+        const nowOpen = tr.style.display !== "none";
+        if(nowOpen){
+          tr.style.display = "none";
+          expanded.delete(repo);
+          const count = tr.querySelectorAll("tbody tr").length;
+          btn.textContent = `Expand (${count})`;
+        }else{
+          tr.style.display = "";
+          expanded.add(repo);
+          btn.textContent = "Collapse";
+        }
+      });
+    });
+  }
+
+  async function refresh(){
+    setError("");
+    save();
+
+    const base = apiBaseEl.value.trim().replace(/\/+$/,"");
+    const uiBase = uiBaseEl.value.trim().replace(/\/+$/,"");
+    const limit = parseInt(limitEl.value,10) || 20;
+
+    if(!base || !uiBase) return setError("API Base URL and UI Base URL are required.");
+    if(modeEl.value === "direct" && !tokenEl.value.trim()) return setError("Token required in Direct mode.");
+
+    refreshBtn.disabled = true;
+    discoverBtn.disabled = true;
+
+    try{
+      let repos = parseRepos(reposEl.value);
+      if(!repos.length){
+        await discoverRepos();
+        repos = parseRepos(reposEl.value);
+      }else{
+        repoSourceEl.textContent = `Repo source: manual list (${repos.length} repos)`;
+      }
+
+      const settled = await Promise.allSettled(
+        repos.map(r => fetchRunsForRepo(base, r.owner, r.repo, limit, uiBase))
+      );
+
+      const allRuns = [], errors = [];
+      for(const s of settled){
+        if(s.status === "fulfilled") allRuns.push(...s.value);
+        else errors.push(String(s.reason?.message || s.reason));
+      }
+
+      const repoRowsAll = buildRepoRows(allRuns);
+      const repoRowsVisible = applyRowFilter(repoRowsAll);
+
+      renderRepoRows(repoRowsVisible);
+      renderSummary(summarize(repoRowsVisible));
+      lastUpdatedEl.textContent = `Last updated: ${new Date().toLocaleString()} (${filterEl.value})`;
+
+      if(errors.length) setError(`Some repositories failed:\n- ${errors.join("\n- ")}`);
+    }catch(e){
+      setError(String(e.message || e));
+    }finally{
+      refreshBtn.disabled = false;
+      discoverBtn.disabled = false;
+    }
+  }
+
+  function startPolling(){
+    clearInterval(timer);
+    if(!polling) return;
+    timer = setInterval(refresh, Math.max(5, parseInt(intervalEl.value,10)||10)*1000);
+  }
+
+  [modeEl, apiBaseEl, uiBaseEl, tokenEl, intervalEl, limitEl, filterEl, reposEl].forEach(i => {
+    i.addEventListener("change", () => {
+      if(i===modeEl) updateModeUI();
+      if(i===intervalEl) startPolling();
+      save();
+      if(i===filterEl) refresh();
+    });
+  });
+
+  discoverBtn.addEventListener("click", async () => {
+    try { await discoverRepos(); await refresh(); } catch(e){ setError(String(e.message || e)); }
+  });
+
+  refreshBtn.addEventListener("click", refresh);
+
+  togglePollBtn.addEventListener("click", () => {
+    polling = !polling;
+    togglePollBtn.textContent = polling ? "Pause Auto-Refresh" : "Resume Auto-Refresh";
+    startPolling();
+  });
+
+  load();
+  updateModeUI();
+  refresh();
+  startPolling();
+})();
+</script>
+</body>
+</html>
