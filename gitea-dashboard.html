@@ -213,10 +213,24 @@
 
   function esc(s){ return String(s ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c])); }
   function fmtDate(iso){ return iso ? new Date(iso).toLocaleString() : "-"; }
-  function fmtDuration(startIso, endIso){
+  function normalizeDurationSeconds(raw){
+    if(raw === null || raw === undefined || raw === "") return null;
+    const n = Number(raw);
+    if(!Number.isFinite(n) || n < 0) return null;
+    // Some APIs return milliseconds while others return seconds.
+    return n > 86400 ? Math.floor(n / 1000) : Math.floor(n);
+  }
+
+  function fmtDuration(startIso, endIso, explicitDurationSec = null){
+    if(explicitDurationSec !== null && explicitDurationSec !== undefined){
+      const sec = Math.max(0, Math.floor(explicitDurationSec));
+      const h = Math.floor(sec/3600), m = Math.floor((sec%3600)/60), ss = sec%60;
+      return h ? `${h}h ${m}m ${ss}s` : `${m}m ${ss}s`;
+    }
     if(!startIso) return "-";
     const s = new Date(startIso).getTime();
     const e = endIso ? new Date(endIso).getTime() : Date.now();
+    if(!Number.isFinite(s) || !Number.isFinite(e)) return "-";
     const sec = Math.max(0, Math.floor((e-s)/1000));
     const h = Math.floor(sec/3600), m = Math.floor((sec%3600)/60), ss = sec%60;
     return h ? `${h}h ${m}m ${ss}s` : `${m}m ${ss}s`;
@@ -270,8 +284,9 @@
       branch: run.head_branch || "-",
       event: run.event || "-",
       actor: run.actor?.login || run.triggering_actor?.login || "-",
-      startedAt: run.run_started_at || run.started_at || run.created_at || null,
-      completedAt: run.updated_at || null,
+      startedAt: run.run_started_at || run.started_at || null,
+      completedAt: run.run_finished_at || run.completed_at || run.stopped_at || run.finished_at || run.updated_at || null,
+      durationSec: normalizeDurationSeconds(run.duration ?? run.run_duration ?? run.run_duration_ms ?? null),
       htmlUrl: run.html_url || `${uiBase}/${owner}/${repo}/actions/runs/${run.id}`
     }));
   }
@@ -347,7 +362,7 @@
                 <td>${esc(r.branch)}</td>
                 <td>${esc(r.actor)}</td>
                 <td>${fmtDate(r.startedAt)}</td>
-                <td>${fmtDuration(r.startedAt, r.status==="in_progress" ? null : r.completedAt)}</td>
+                <td>${fmtDuration(r.startedAt, isRunning(r.status) ? null : r.completedAt, r.durationSec)}</td>
                 <td><a class="link" target="_blank" rel="noopener" href="${r.htmlUrl}">Open run ↗</a></td>
               </tr>
             `).join("")}
@@ -383,7 +398,7 @@
         <td>${esc(rr.latest.event)}</td>
         <td>${esc(rr.latest.actor)}</td>
         <td>${fmtDate(rr.latest.startedAt)}</td>
-        <td>${fmtDuration(rr.latest.startedAt, rr.latest.status==="in_progress" ? null : rr.latest.completedAt)}</td>
+        <td>${fmtDuration(rr.latest.startedAt, isRunning(rr.latest.status) ? null : rr.latest.completedAt, rr.latest.durationSec)}</td>
         <td><a class="link" target="_blank" rel="noopener" href="${rr.latest.htmlUrl}">Open run ↗</a></td>
         <td><button class="btn small secondary" data-repo="${rr.repo}" data-eid="exp_${id}">${open ? "Collapse" : `Expand (${rr.older.length})`}</button></td>
       `;
