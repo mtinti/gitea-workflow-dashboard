@@ -221,6 +221,16 @@
 
   function esc(s){ return String(s ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c])); }
   function fmtDate(iso){ return iso ? new Date(iso).toLocaleString() : "-"; }
+  function normalizeIsoDate(raw){
+    if(!raw) return null;
+    const d = new Date(raw);
+    const t = d.getTime();
+    if(!Number.isFinite(t)) return null;
+    // Treat sentinel/invalid API dates as unknown (e.g. 0001-01-01 or unix epoch defaults).
+    const year = d.getUTCFullYear();
+    if(year < 2000 || year > 2100) return null;
+    return d.toISOString();
+  }
   function normalizeDurationSeconds(raw){
     if(raw === null || raw === undefined || raw === "") return null;
     const n = Number(raw);
@@ -325,21 +335,28 @@
 
   async function fetchRunsForRepo(base, owner, repo, limit, uiBase){
     const data = await apiGet(`${base}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/runs?limit=${limit}&page=1`);
-    return (data.workflow_runs || []).map(run => ({
-      repo: `${owner}/${repo}`,
-      id: run.id,
-      workflowKey: String(run.workflow_id || run.workflow_name || run.name || run.path || "workflow"),
-      workflowIdentifiers: deriveWorkflowIdentifiers(run),
-      workflowName: run.workflow_name || run.name || run.display_title || `workflow ${run.workflow_id || ""}`.trim(),
-      status: runStatus(run.status, run.conclusion),
-      branch: run.head_branch || "-",
-      event: run.event || "-",
-      actor: run.actor?.login || run.triggering_actor?.login || "-",
-      startedAt: run.run_started_at || run.started_at || null,
-      completedAt: run.run_finished_at || run.completed_at || run.stopped_at || run.finished_at || run.updated_at || null,
-      durationSec: normalizeDurationSeconds(run.duration ?? run.run_duration ?? run.run_duration_ms ?? null),
-      htmlUrl: run.html_url || `${uiBase}/${owner}/${repo}/actions/runs/${run.id}`
-    }));
+    return (data.workflow_runs || []).map(run => {
+      const status = runStatus(run.status, run.conclusion);
+      const startedAt = normalizeIsoDate(run.run_started_at || run.started_at);
+      const finishedAt = normalizeIsoDate(run.run_finished_at || run.completed_at || run.stopped_at || run.finished_at);
+      const updatedAt = normalizeIsoDate(run.updated_at);
+      const completedAt = finishedAt || (isRunning(status) && startedAt ? updatedAt : null);
+      return {
+        repo: `${owner}/${repo}`,
+        id: run.id,
+        workflowKey: String(run.workflow_id || run.workflow_name || run.name || run.path || "workflow"),
+        workflowIdentifiers: deriveWorkflowIdentifiers(run),
+        workflowName: run.workflow_name || run.name || run.display_title || `workflow ${run.workflow_id || ""}`.trim(),
+        status,
+        branch: run.head_branch || "-",
+        event: run.event || "-",
+        actor: run.actor?.login || run.triggering_actor?.login || "-",
+        startedAt,
+        completedAt,
+        durationSec: normalizeDurationSeconds(run.duration ?? run.run_duration ?? run.run_duration_ms ?? null),
+        htmlUrl: run.html_url || `${uiBase}/${owner}/${repo}/actions/runs/${run.id}`
+      };
+    });
   }
 
   function byNewest(a,b){ return new Date(b.startedAt||0) - new Date(a.startedAt||0); }
