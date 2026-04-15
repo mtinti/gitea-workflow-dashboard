@@ -135,6 +135,7 @@
             <th>Started</th>
             <th>Duration</th>
             <th>Run</th>
+            <th>Trigger</th>
             <th>Expand</th>
           </tr>
         </thead>
@@ -250,6 +251,32 @@
     }).filter(x=>x.owner && x.repo);
   }
 
+  function normalizeWorkflowPath(rawPath){
+    const p = String(rawPath || "").trim();
+    if(!p) return "";
+    // Gitea may return workflow paths suffixed like "...yaml@refs/heads/main" on run objects.
+    return p.replace(/@refs\/heads\/.+$/i, "").replace(/@refs\/tags\/.+$/i, "");
+  }
+
+  function deriveWorkflowIdentifiers(run){
+    const ids = [];
+    const add = (v) => {
+      const s = String(v ?? "").trim();
+      if(s && !ids.includes(s)) ids.push(s);
+    };
+
+    add(run.workflow_id);
+    add(run.workflow_name);
+    add(run.name);
+    add(run.path);
+
+    const normalizedPath = normalizeWorkflowPath(run.path);
+    add(normalizedPath);
+    if(normalizedPath.includes("/")) add(normalizedPath.split("/").pop());
+
+    return ids;
+  }
+
   function headers(){
     if(modeEl.value === "proxy") return { "Accept":"application/json" };
     return { "Accept":"application/json", "Authorization":`token ${tokenEl.value.trim()}` };
@@ -262,6 +289,22 @@
       throw new Error(`${res.status} ${res.statusText} ${txt.slice(0,240)}`);
     }
     return res.json();
+  }
+
+  async function apiPost(url, body){
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { ...headers(), "Content-Type":"application/json" },
+      body: JSON.stringify(body || {})
+    });
+    if(!res.ok){
+      const txt = await res.text().catch(()=> "");
+      throw new Error(`${res.status} ${res.statusText} ${txt.slice(0,240)}`);
+    }
+    if(res.status === 204) return null;
+    const txt = await res.text().catch(()=> "");
+    if(!txt) return null;
+    try{ return JSON.parse(txt); }catch{ return txt; }
   }
 
   async function discoverRepos(){
@@ -286,6 +329,7 @@
       repo: `${owner}/${repo}`,
       id: run.id,
       workflowKey: String(run.workflow_id || run.workflow_name || run.name || run.path || "workflow"),
+      workflowIdentifiers: deriveWorkflowIdentifiers(run),
       workflowName: run.workflow_name || run.name || run.display_title || `workflow ${run.workflow_id || ""}`.trim(),
       status: runStatus(run.status, run.conclusion),
       branch: run.head_branch || "-",
@@ -408,10 +452,80 @@
     return repoRows;
   }
 
+  function parseRepoFullName(full){
+    const [owner, repo] = String(full || "").split("/");
+    return { owner, repo };
+  }
+
+  async function dispatchWorkflow(base, owner, repo, workflowIdentifiers, ref, inputs){
+    const payload = inputs && Object.keys(inputs).length ? { ref, inputs } : { ref };
+    const ownerPart = encodeURIComponent(owner);
+    const repoPart = encodeURIComponent(repo);
+    const identifiers = Array.isArray(workflowIdentifiers) ? workflowIdentifiers : [workflowIdentifiers];
+    const uniqueIds = identifiers.map(x => String(x || "").trim()).filter(Boolean).filter((v, i, a) => a.indexOf(v) === i);
+
+    const endpoints = [];
+    for(const ident of uniqueIds){
+      const id = encodeURIComponent(ident);
+      endpoints.push(`${base}/api/v1/repos/${ownerPart}/${repoPart}/actions/workflows/${id}/dispatches`);
+      endpoints.push(`${base}/api/v1/repos/${ownerPart}/${repoPart}/actions/workflows/${id}/dispatch`);
+    }
+    const errs = [];
+    for(const endpoint of endpoints){
+      try{
+        await apiPost(endpoint, payload);
+        return endpoint;
+      }catch(e){
+        errs.push(`${endpoint} -> ${e.message || String(e)}`);
+      }
+    }
+    throw new Error(`Workflow dispatch failed.\n${errs.join("\n")}`);
+  }
+
+  async function promptAndTriggerWorkflow(rr){
+    const { owner, repo } = parseRepoFullName(rr.repo);
+    if(!owner || !repo) throw new Error(`Invalid repository name: ${rr.repo}`);
+
+    const workflowIdentifiers = rr.latest.workflowIdentifiers?.length
+      ? rr.latest.workflowIdentifiers
+      : [rr.latest.workflowKey, rr.latest.workflowName].filter(Boolean);
+    if(!workflowIdentifiers.length) throw new Error(`No workflow identifier available for ${rr.repo}.`);
+
+    const defaultRef = rr.latest.branch && rr.latest.branch !== "-" ? rr.latest.branch : "main";
+    const ref = window.prompt(
+      `Dispatch workflow for ${rr.repo}\nWorkflow: ${rr.latest.workflowName}\nEnter git ref/branch/tag:`,
+      defaultRef
+    );
+    if(ref === null) return { skipped: true };
+    if(!String(ref).trim()) throw new Error("Ref is required.");
+
+    const rawInputs = window.prompt(
+      "Optional workflow inputs as JSON object (example: {\"environment\":\"staging\"}). Leave empty for none.",
+      ""
+    );
+    if(rawInputs === null) return { skipped: true };
+
+    let inputs = undefined;
+    if(rawInputs.trim()){
+      try{
+        inputs = JSON.parse(rawInputs);
+      }catch{
+        throw new Error("Inputs must be valid JSON.");
+      }
+      if(!inputs || typeof inputs !== "object" || Array.isArray(inputs)){
+        throw new Error("Inputs JSON must be an object.");
+      }
+    }
+
+    const base = apiBaseEl.value.trim().replace(/\/+$/,"");
+    const endpoint = await dispatchWorkflow(base, owner, repo, workflowIdentifiers, String(ref).trim(), inputs);
+    return { skipped: false, endpoint };
+  }
+
   function renderRepoRows(repoRows){
     rowsEl.innerHTML = "";
     if(!repoRows.length){
-      rowsEl.innerHTML = `<tr><td colspan="10" class="muted">No repos/runs for this filter.</td></tr>`;
+      rowsEl.innerHTML = `<tr><td colspan="11" class="muted">No repos/runs for this filter.</td></tr>`;
       return;
     }
 
@@ -430,6 +544,7 @@
         <td>${fmtDate(rr.latest.startedAt)}</td>
         <td>${fmtDuration(rr.latest.startedAt, isRunning(rr.latest.status) ? null : rr.latest.completedAt, rr.latest.durationSec)}</td>
         <td><a class="link" target="_blank" rel="noopener" href="${rr.latest.htmlUrl}">Open run ↗</a></td>
+        <td><button class="btn small" data-trigger="${rr.repo}">Run now</button></td>
         <td><button class="btn small secondary" data-repo="${rr.repo}" data-eid="exp_${id}">${open ? "Collapse" : `Expand (${rr.older.length})`}</button></td>
       `;
       rowsEl.appendChild(main);
@@ -438,7 +553,7 @@
       exp.className = "expand-row";
       exp.id = `exp_${id}`;
       exp.style.display = open ? "" : "none";
-      exp.innerHTML = `<td colspan="10">${olderRowsHtml(rr.older)}</td>`;
+      exp.innerHTML = `<td colspan="11">${olderRowsHtml(rr.older)}</td>`;
       rowsEl.appendChild(exp);
     }
 
@@ -459,6 +574,31 @@
           tr.style.display = "";
           expanded.add(repo);
           btn.textContent = "Collapse";
+        }
+      });
+    });
+
+    rowsEl.querySelectorAll("button[data-trigger]").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const repo = btn.getAttribute("data-trigger");
+        const rr = repoRows.find(x => x.repo === repo);
+        if(!rr) return;
+
+        btn.disabled = true;
+        const oldText = btn.textContent;
+        btn.textContent = "Triggering...";
+        try{
+          const result = await promptAndTriggerWorkflow(rr);
+          if(!result?.skipped){
+            setError("");
+            window.alert(`Workflow dispatch requested for ${repo}.\nEndpoint:\n${result.endpoint}`);
+            await refresh();
+          }
+        }catch(e){
+          setError(String(e.message || e));
+        }finally{
+          btn.disabled = false;
+          btn.textContent = oldText;
         }
       });
     });

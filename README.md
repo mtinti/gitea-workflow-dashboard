@@ -79,7 +79,17 @@ Additionally, the launcher:
 - Leave repositories empty to auto-discover from `/api/v1/user/repos`.
 - Use filtering for failed/running workflows.
 - Expand a row to inspect older runs of the same workflow.
+- Use **Run now** to manually dispatch the latest workflow shown for a repo (you will be prompted for ref and optional JSON inputs).
 - Auto-refresh interval is configurable.
+
+## Token scope recommendations
+
+For the dashboard features in this repo:
+
+- `read:user` is recommended for auto-discovery (`/api/v1/user/repos`).
+- `write:repository` is required for manual workflow dispatch under `/repos/*` routes.
+
+Use least privilege and avoid broad admin scopes unless you explicitly need them.
 
 ## Direct mode (optional)
 
