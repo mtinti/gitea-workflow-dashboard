@@ -168,6 +168,13 @@
   const toStatus = s => (s || "unknown").toLowerCase();
   const isFailed = s => ["failure","cancelled"].includes(s);
   const isRunning = s => ["in_progress","queued","pending"].includes(s);
+  function runStatus(rawStatus, rawConclusion){
+    const status = toStatus(rawStatus);
+    const conclusion = toStatus(rawConclusion);
+    // Gitea/GitHub Actions usually return status=completed with conclusion=success/failure/etc.
+    if(status === "completed") return conclusion === "unknown" ? "success" : conclusion;
+    return status !== "unknown" ? status : conclusion;
+  }
 
   function save(){
     localStorage.setItem("giteaDashExpandV2", JSON.stringify({
@@ -280,7 +287,7 @@
       id: run.id,
       workflowKey: String(run.workflow_id || run.workflow_name || run.name || run.path || "workflow"),
       workflowName: run.workflow_name || run.name || run.display_title || `workflow ${run.workflow_id || ""}`.trim(),
-      status: toStatus(run.status || run.conclusion),
+      status: runStatus(run.status, run.conclusion),
       branch: run.head_branch || "-",
       event: run.event || "-",
       actor: run.actor?.login || run.triggering_actor?.login || "-",
