@@ -318,12 +318,35 @@
     return out;
   }
 
-  function summarize(repoRows){
-    const c = { repos: repoRows.length, totalLatest: repoRows.length, success:0,failure:0,in_progress:0,queued:0,pending:0,cancelled:0 };
+  function summarize(repoRows, allRuns){
+    const sevenDaysAgoMs = Date.now() - (7 * 24 * 60 * 60 * 1000);
+    const c = {
+      repos: repoRows.length,
+      totalLatest: repoRows.length,
+      success7d: 0,
+      failure7d: 0,
+      in_progress: 0,
+      queued: 0,
+      pending: 0,
+      cancelled: 0
+    };
+
+    // Live counts from the latest row per repo (snapshot at refresh time).
     for(const rr of repoRows){
       const s = rr.latest.status;
       if(c[s] !== undefined) c[s]++;
     }
+
+    // Historical success/failure totals from all runs in the last 7 days.
+    for(const run of allRuns){
+      const status = run.status;
+      if(status !== "success" && status !== "failure") continue;
+      const refTime = new Date(run.completedAt || run.startedAt || 0).getTime();
+      if(!Number.isFinite(refTime) || refTime < sevenDaysAgoMs) continue;
+      if(status === "success") c.success7d++;
+      if(status === "failure") c.failure7d++;
+    }
+
     return c;
   }
 
@@ -331,8 +354,8 @@
     summaryEl.innerHTML = `
       <div class="stat"><div class="k">Repos shown</div><div class="v">${s.repos}</div></div>
       <div class="stat"><div class="k">Latest rows</div><div class="v">${s.totalLatest}</div></div>
-      <div class="stat"><div class="k">Success</div><div class="v ok">${s.success}</div></div>
-      <div class="stat"><div class="k">Failures</div><div class="v fail">${s.failure}</div></div>
+      <div class="stat"><div class="k">Success (7d)</div><div class="v ok">${s.success7d}</div></div>
+      <div class="stat"><div class="k">Failures (7d)</div><div class="v fail">${s.failure7d}</div></div>
       <div class="stat"><div class="k">In Progress</div><div class="v run">${s.in_progress}</div></div>
       <div class="stat"><div class="k">Queued/Pending</div><div class="v queue">${s.queued+s.pending}</div></div>
       <div class="stat"><div class="k">Cancelled</div><div class="v">${s.cancelled}</div></div>`;
@@ -471,7 +494,7 @@
       const repoRowsVisible = applyRowFilter(repoRowsAll);
 
       renderRepoRows(repoRowsVisible);
-      renderSummary(summarize(repoRowsVisible));
+      renderSummary(summarize(repoRowsAll, allRuns));
       lastUpdatedEl.textContent = `Last updated: ${new Date().toLocaleString()} (${filterEl.value})`;
 
       if(errors.length) setError(`Some repositories failed:\n- ${errors.join("\n- ")}`);
