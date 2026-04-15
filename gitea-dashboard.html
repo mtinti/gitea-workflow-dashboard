@@ -251,6 +251,32 @@
     }).filter(x=>x.owner && x.repo);
   }
 
+  function normalizeWorkflowPath(rawPath){
+    const p = String(rawPath || "").trim();
+    if(!p) return "";
+    // Gitea may return workflow paths suffixed like "...yaml@refs/heads/main" on run objects.
+    return p.replace(/@refs\/heads\/.+$/i, "").replace(/@refs\/tags\/.+$/i, "");
+  }
+
+  function deriveWorkflowIdentifiers(run){
+    const ids = [];
+    const add = (v) => {
+      const s = String(v ?? "").trim();
+      if(s && !ids.includes(s)) ids.push(s);
+    };
+
+    add(run.workflow_id);
+    add(run.workflow_name);
+    add(run.name);
+    add(run.path);
+
+    const normalizedPath = normalizeWorkflowPath(run.path);
+    add(normalizedPath);
+    if(normalizedPath.includes("/")) add(normalizedPath.split("/").pop());
+
+    return ids;
+  }
+
   function headers(){
     if(modeEl.value === "proxy") return { "Accept":"application/json" };
     return { "Accept":"application/json", "Authorization":`token ${tokenEl.value.trim()}` };
@@ -303,6 +329,7 @@
       repo: `${owner}/${repo}`,
       id: run.id,
       workflowKey: String(run.workflow_id || run.workflow_name || run.name || run.path || "workflow"),
+      workflowIdentifiers: deriveWorkflowIdentifiers(run),
       workflowName: run.workflow_name || run.name || run.display_title || `workflow ${run.workflow_id || ""}`.trim(),
       status: runStatus(run.status, run.conclusion),
       branch: run.head_branch || "-",
@@ -430,14 +457,19 @@
     return { owner, repo };
   }
 
-  async function dispatchWorkflow(base, owner, repo, workflowIdentifier, ref, inputs){
-    const id = encodeURIComponent(String(workflowIdentifier));
+  async function dispatchWorkflow(base, owner, repo, workflowIdentifiers, ref, inputs){
     const payload = inputs && Object.keys(inputs).length ? { ref, inputs } : { ref };
-    const endpoints = [
-      `${base}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/workflows/${id}/dispatches`,
-      `${base}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/workflows/${id}/dispatch`
-    ];
+    const ownerPart = encodeURIComponent(owner);
+    const repoPart = encodeURIComponent(repo);
+    const identifiers = Array.isArray(workflowIdentifiers) ? workflowIdentifiers : [workflowIdentifiers];
+    const uniqueIds = identifiers.map(x => String(x || "").trim()).filter(Boolean).filter((v, i, a) => a.indexOf(v) === i);
 
+    const endpoints = [];
+    for(const ident of uniqueIds){
+      const id = encodeURIComponent(ident);
+      endpoints.push(`${base}/api/v1/repos/${ownerPart}/${repoPart}/actions/workflows/${id}/dispatches`);
+      endpoints.push(`${base}/api/v1/repos/${ownerPart}/${repoPart}/actions/workflows/${id}/dispatch`);
+    }
     const errs = [];
     for(const endpoint of endpoints){
       try{
@@ -454,8 +486,10 @@
     const { owner, repo } = parseRepoFullName(rr.repo);
     if(!owner || !repo) throw new Error(`Invalid repository name: ${rr.repo}`);
 
-    const workflowIdentifier = rr.latest.workflowKey || rr.latest.workflowName;
-    if(!workflowIdentifier) throw new Error(`No workflow identifier available for ${rr.repo}.`);
+    const workflowIdentifiers = rr.latest.workflowIdentifiers?.length
+      ? rr.latest.workflowIdentifiers
+      : [rr.latest.workflowKey, rr.latest.workflowName].filter(Boolean);
+    if(!workflowIdentifiers.length) throw new Error(`No workflow identifier available for ${rr.repo}.`);
 
     const defaultRef = rr.latest.branch && rr.latest.branch !== "-" ? rr.latest.branch : "main";
     const ref = window.prompt(
@@ -484,7 +518,7 @@
     }
 
     const base = apiBaseEl.value.trim().replace(/\/+$/,"");
-    const endpoint = await dispatchWorkflow(base, owner, repo, workflowIdentifier, String(ref).trim(), inputs);
+    const endpoint = await dispatchWorkflow(base, owner, repo, workflowIdentifiers, String(ref).trim(), inputs);
     return { skipped: false, endpoint };
   }
 
