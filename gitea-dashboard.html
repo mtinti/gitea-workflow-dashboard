@@ -135,6 +135,7 @@
             <th>Started</th>
             <th>Duration</th>
             <th>Run</th>
+            <th>Trigger</th>
             <th>Expand</th>
           </tr>
         </thead>
@@ -262,6 +263,22 @@
       throw new Error(`${res.status} ${res.statusText} ${txt.slice(0,240)}`);
     }
     return res.json();
+  }
+
+  async function apiPost(url, body){
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { ...headers(), "Content-Type":"application/json" },
+      body: JSON.stringify(body || {})
+    });
+    if(!res.ok){
+      const txt = await res.text().catch(()=> "");
+      throw new Error(`${res.status} ${res.statusText} ${txt.slice(0,240)}`);
+    }
+    if(res.status === 204) return null;
+    const txt = await res.text().catch(()=> "");
+    if(!txt) return null;
+    try{ return JSON.parse(txt); }catch{ return txt; }
   }
 
   async function discoverRepos(){
@@ -408,10 +425,73 @@
     return repoRows;
   }
 
+  function parseRepoFullName(full){
+    const [owner, repo] = String(full || "").split("/");
+    return { owner, repo };
+  }
+
+  async function dispatchWorkflow(base, owner, repo, workflowIdentifier, ref, inputs){
+    const id = encodeURIComponent(String(workflowIdentifier));
+    const payload = inputs && Object.keys(inputs).length ? { ref, inputs } : { ref };
+    const endpoints = [
+      `${base}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/workflows/${id}/dispatches`,
+      `${base}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/workflows/${id}/dispatch`
+    ];
+
+    const errs = [];
+    for(const endpoint of endpoints){
+      try{
+        await apiPost(endpoint, payload);
+        return endpoint;
+      }catch(e){
+        errs.push(`${endpoint} -> ${e.message || String(e)}`);
+      }
+    }
+    throw new Error(`Workflow dispatch failed.\n${errs.join("\n")}`);
+  }
+
+  async function promptAndTriggerWorkflow(rr){
+    const { owner, repo } = parseRepoFullName(rr.repo);
+    if(!owner || !repo) throw new Error(`Invalid repository name: ${rr.repo}`);
+
+    const workflowIdentifier = rr.latest.workflowKey || rr.latest.workflowName;
+    if(!workflowIdentifier) throw new Error(`No workflow identifier available for ${rr.repo}.`);
+
+    const defaultRef = rr.latest.branch && rr.latest.branch !== "-" ? rr.latest.branch : "main";
+    const ref = window.prompt(
+      `Dispatch workflow for ${rr.repo}\nWorkflow: ${rr.latest.workflowName}\nEnter git ref/branch/tag:`,
+      defaultRef
+    );
+    if(ref === null) return { skipped: true };
+    if(!String(ref).trim()) throw new Error("Ref is required.");
+
+    const rawInputs = window.prompt(
+      "Optional workflow inputs as JSON object (example: {\"environment\":\"staging\"}). Leave empty for none.",
+      ""
+    );
+    if(rawInputs === null) return { skipped: true };
+
+    let inputs = undefined;
+    if(rawInputs.trim()){
+      try{
+        inputs = JSON.parse(rawInputs);
+      }catch{
+        throw new Error("Inputs must be valid JSON.");
+      }
+      if(!inputs || typeof inputs !== "object" || Array.isArray(inputs)){
+        throw new Error("Inputs JSON must be an object.");
+      }
+    }
+
+    const base = apiBaseEl.value.trim().replace(/\/+$/,"");
+    const endpoint = await dispatchWorkflow(base, owner, repo, workflowIdentifier, String(ref).trim(), inputs);
+    return { skipped: false, endpoint };
+  }
+
   function renderRepoRows(repoRows){
     rowsEl.innerHTML = "";
     if(!repoRows.length){
-      rowsEl.innerHTML = `<tr><td colspan="10" class="muted">No repos/runs for this filter.</td></tr>`;
+      rowsEl.innerHTML = `<tr><td colspan="11" class="muted">No repos/runs for this filter.</td></tr>`;
       return;
     }
 
@@ -430,6 +510,7 @@
         <td>${fmtDate(rr.latest.startedAt)}</td>
         <td>${fmtDuration(rr.latest.startedAt, isRunning(rr.latest.status) ? null : rr.latest.completedAt, rr.latest.durationSec)}</td>
         <td><a class="link" target="_blank" rel="noopener" href="${rr.latest.htmlUrl}">Open run ↗</a></td>
+        <td><button class="btn small" data-trigger="${rr.repo}">Run now</button></td>
         <td><button class="btn small secondary" data-repo="${rr.repo}" data-eid="exp_${id}">${open ? "Collapse" : `Expand (${rr.older.length})`}</button></td>
       `;
       rowsEl.appendChild(main);
@@ -438,7 +519,7 @@
       exp.className = "expand-row";
       exp.id = `exp_${id}`;
       exp.style.display = open ? "" : "none";
-      exp.innerHTML = `<td colspan="10">${olderRowsHtml(rr.older)}</td>`;
+      exp.innerHTML = `<td colspan="11">${olderRowsHtml(rr.older)}</td>`;
       rowsEl.appendChild(exp);
     }
 
@@ -459,6 +540,31 @@
           tr.style.display = "";
           expanded.add(repo);
           btn.textContent = "Collapse";
+        }
+      });
+    });
+
+    rowsEl.querySelectorAll("button[data-trigger]").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const repo = btn.getAttribute("data-trigger");
+        const rr = repoRows.find(x => x.repo === repo);
+        if(!rr) return;
+
+        btn.disabled = true;
+        const oldText = btn.textContent;
+        btn.textContent = "Triggering...";
+        try{
+          const result = await promptAndTriggerWorkflow(rr);
+          if(!result?.skipped){
+            setError("");
+            window.alert(`Workflow dispatch requested for ${repo}.\nEndpoint:\n${result.endpoint}`);
+            await refresh();
+          }
+        }catch(e){
+          setError(String(e.message || e));
+        }finally{
+          btn.disabled = false;
+          btn.textContent = oldText;
         }
       });
     });
