@@ -34,7 +34,7 @@ Put only the token string in `token.txt` (no quotes):
 <your-token>
 ```
 
-In **Proxy mode**, `launcher.py` reads this token automatically and injects it into proxied requests.
+`launcher.py` reads this token automatically and injects it into proxied requests, so the browser never sees it.
 
 ### 3) Run the launcher
 
@@ -53,7 +53,7 @@ Open:
 
 - `http://127.0.0.1:8765/gitea-dashboard.html`
 
-Keep **Mode = Proxy (launcher.py)** and API base:
+The dashboard talks to the proxy by default; the API base is:
 
 - `http://127.0.0.1:8765/gitea`
 
@@ -72,7 +72,7 @@ Additionally, the launcher:
 
 - Handles CORS/OPTIONS headers for browser compatibility.
 - Forwards common HTTP methods (`GET`, `POST`, `PUT`, `DELETE`).
-- Injects `Authorization: token <token>` from `token.txt` so you do not expose the token in frontend code when using Proxy mode.
+- Injects `Authorization: token <token>` from `token.txt` so the token never leaves the local machine via the browser.
 
 ## Dashboard usage notes
 
@@ -90,13 +90,6 @@ For the dashboard features in this repo:
 - `write:repository` is required for manual workflow dispatch under `/repos/*` routes.
 
 Use least privilege and avoid broad admin scopes unless you explicitly need them.
-
-## Direct mode (optional)
-
-The dashboard also has a **Direct** mode that sends API calls to Gitea directly.
-
-- This can fail due to browser CORS settings depending on your Gitea configuration.
-- If Direct mode fails, switch back to Proxy mode.
 
 ## Files
 
