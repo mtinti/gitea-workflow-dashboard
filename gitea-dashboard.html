@@ -315,6 +315,14 @@
       const finishedAt = normalizeIsoDate(run.run_finished_at || run.completed_at || run.stopped_at || run.finished_at);
       const updatedAt = normalizeIsoDate(run.updated_at);
       const completedAt = finishedAt || (isRunning(status) && startedAt ? updatedAt : null);
+      // Gitea does not populate a dedicated field for scheduled runs; it reuses
+      // whatever event is listed in the workflow's `on:` (often "push"). The
+      // only reliable signal is the synthetic actor `gitea-actions` (id -2),
+      // which Gitea attributes cron-triggered runs to.
+      const isScheduled =
+        run.actor?.id === -2 ||
+        run.actor?.login === "gitea-actions" ||
+        run.trigger_actor?.login === "gitea-actions";
       return {
         repo: `${owner}/${repo}`,
         id: run.id,
@@ -323,8 +331,8 @@
         workflowName: run.workflow_name || run.name || run.display_title || `workflow ${run.workflow_id || ""}`.trim(),
         status,
         branch: run.head_branch || "-",
-        event: run.event || "-",
-        actor: run.actor?.login || run.triggering_actor?.login || "-",
+        event: isScheduled ? "schedule" : (run.event || "-"),
+        actor: run.actor?.login || run.trigger_actor?.login || "-",
         startedAt,
         completedAt,
         durationSec: normalizeDurationSeconds(run.duration ?? run.run_duration ?? run.run_duration_ms ?? null),
