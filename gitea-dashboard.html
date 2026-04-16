@@ -408,37 +408,38 @@
       <div class="stat"><div class="k">Cancelled</div><div class="v">${s.cancelled}</div></div>`;
   }
 
+  function olderRowHtml(r){
+    const dur = esc(fmtDuration(r.startedAt, isRunning(r.status) ? null : r.completedAt, r.durationSec));
+    return `<tr>
+      <td>${esc(r.workflowName)} <span class="muted">#${esc(r.id)}</span></td>
+      <td><span class="chip status-${esc(r.status)}"><span class="dot"></span>${esc(r.status)}</span></td>
+      <td>${esc(r.branch)}</td>
+      <td>${esc(r.actor)}</td>
+      <td>${esc(fmtDate(r.startedAt))}</td>
+      <td>${dur}</td>
+      <td><a class="link" target="_blank" rel="noopener" href="${esc(safeUrl(r.htmlUrl))}">Open run ↗</a></td>
+    </tr>`;
+  }
+
   function olderRowsHtml(older){
     if(!older.length) return `<div class="muted" style="padding:8px 2px">No older runs for this workflow.</div>`;
-    return `
-      <div class="older">
-        <table>
-          <thead>
-            <tr>
-              <th>Workflow</th>
-              <th>Status</th>
-              <th>Branch</th>
-              <th>Actor</th>
-              <th>Started</th>
-              <th>Duration</th>
-              <th>Run</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${older.map(r => `
-              <tr>
-                <td>${esc(r.workflowName)} <span class="muted">#${esc(r.id)}</span></td>
-                <td><span class="chip status-${esc(r.status)}"><span class="dot"></span>${esc(r.status)}</span></td>
-                <td>${esc(r.branch)}</td>
-                <td>${esc(r.actor)}</td>
-                <td>${esc(fmtDate(r.startedAt))}</td>
-                <td>${esc(fmtDuration(r.startedAt, isRunning(r.status) ? null : r.completedAt, r.durationSec))}</td>
-                <td><a class="link" target="_blank" rel="noopener" href="${esc(safeUrl(r.htmlUrl))}">Open run ↗</a></td>
-              </tr>
-            `).join("")}
-          </tbody>
-        </table>
-      </div>`;
+    const rows = older.map(olderRowHtml).join("");
+    return `<div class="older">
+      <table>
+        <thead>
+          <tr>
+            <th>Workflow</th>
+            <th>Status</th>
+            <th>Branch</th>
+            <th>Actor</th>
+            <th>Started</th>
+            <th>Duration</th>
+            <th>Run</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
   }
 
   function applyRowFilter(repoRows){
