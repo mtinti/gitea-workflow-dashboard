@@ -16,7 +16,7 @@
     h1{margin:0 0 4px;font-size:1.55rem}
     .sub{color:var(--muted);margin-bottom:12px}
     .panel{background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid var(--border);border-radius:14px;padding:14px}
-    .controls{display:grid;grid-template-columns:1.35fr 1fr 140px 120px 160px auto;gap:10px;align-items:end}
+    .controls{display:grid;grid-template-columns:1fr 140px 120px 160px auto;gap:10px;align-items:end}
     .field label{display:block;color:var(--muted);font-size:.83rem;margin-bottom:6px}
     input,select,textarea{width:100%;background:#0f1529;color:var(--text);border:1px solid #2b3760;border-radius:10px;padding:10px 12px;outline:none}
     input:focus,select:focus,textarea:focus{border-color:#4f6ecf;box-shadow:0 0 0 3px rgba(79,110,207,.25)}
@@ -66,10 +66,6 @@
   <section class="panel">
     <div class="controls">
       <div class="field">
-        <label for="apiBase">API Base URL</label>
-        <input id="apiBase" value="http://127.0.0.1:8765/gitea" />
-      </div>
-      <div class="field">
         <label for="uiBase">Gitea UI URL</label>
         <input id="uiBase" value="http://localhost:3000" />
       </div>
@@ -90,10 +86,6 @@
         </select>
       </div>
       <button class="btn" id="refreshBtn">Refresh</button>
-    </div>
-
-    <div class="muted" style="margin-top:10px;font-size:.82rem">
-      Token is read server-side from <span class="mono">token.txt</span> by <span class="mono">launcher.py</span>; it never reaches the browser.
     </div>
 
     <div class="row">
@@ -139,11 +131,15 @@
 <script>
 (() => {
   const $ = id => document.getElementById(id);
-  const apiBaseEl = $("apiBase"), uiBaseEl = $("uiBase"),
+  const uiBaseEl = $("uiBase"),
         intervalEl = $("interval"), limitEl = $("limit"), filterEl = $("filter"),
         reposEl = $("repos"), refreshBtn = $("refreshBtn"), discoverBtn = $("discoverBtn"),
         togglePollBtn = $("togglePollBtn"), rowsEl = $("rows"), summaryEl = $("summary"),
         errorEl = $("error"), lastUpdatedEl = $("lastUpdated"), repoSourceEl = $("repoSource");
+
+  // The dashboard is served by launcher.py from the same origin as the proxy,
+  // so a relative path is enough — no need for a configurable API base.
+  const API_BASE = "/gitea";
 
   let polling = true;
   let timer = null;
@@ -166,7 +162,7 @@
 
   function save(){
     localStorage.setItem("giteaDashExpandV3", JSON.stringify({
-      apiBase: apiBaseEl.value.trim(), uiBase: uiBaseEl.value.trim(),
+      uiBase: uiBaseEl.value.trim(),
       interval: intervalEl.value, limit: limitEl.value,
       filter: filterEl.value, repos: reposEl.value
     }));
@@ -179,7 +175,6 @@
     if(!raw) return;
     try{
       const s = JSON.parse(raw);
-      if(s.apiBase) apiBaseEl.value = s.apiBase;
       if(s.uiBase) uiBaseEl.value = s.uiBase;
       if(s.interval) intervalEl.value = s.interval;
       if(s.limit) limitEl.value = s.limit;
@@ -293,7 +288,7 @@
   }
 
   async function discoverRepos(){
-    const base = apiBaseEl.value.trim().replace(/\/+$/,"");
+    const base = API_BASE;
     const repos = [];
     try{
       for(let page=1; page<=20; page++){
@@ -514,8 +509,7 @@
       }
     }
 
-    const base = apiBaseEl.value.trim().replace(/\/+$/,"");
-    const endpoint = await dispatchWorkflow(base, owner, repo, workflowIdentifiers, String(ref).trim(), inputs);
+    const endpoint = await dispatchWorkflow(API_BASE, owner, repo, workflowIdentifiers, String(ref).trim(), inputs);
     return { skipped: false, endpoint };
   }
 
@@ -614,12 +608,12 @@
     setError("");
     save();
 
-    const base = apiBaseEl.value.trim().replace(/\/+$/,"");
+    const base = API_BASE;
     const uiBase = uiBaseEl.value.trim().replace(/\/+$/,"");
     const limit = parseInt(limitEl.value,10) || 20;
 
-    if(!base || !uiBase){
-      setError("API Base URL and UI Base URL are required.");
+    if(!uiBase){
+      setError("Gitea UI URL is required.");
       inFlight = false;
       return;
     }
@@ -666,7 +660,7 @@
     timer = setInterval(refresh, Math.max(5, parseInt(intervalEl.value,10)||10)*1000);
   }
 
-  [apiBaseEl, uiBaseEl, intervalEl, limitEl, filterEl, reposEl].forEach(i => {
+  [uiBaseEl, intervalEl, limitEl, filterEl, reposEl].forEach(i => {
     i.addEventListener("change", () => {
       save();
       if(i===intervalEl) startPolling();
