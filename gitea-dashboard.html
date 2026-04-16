@@ -16,7 +16,7 @@
     h1{margin:0 0 4px;font-size:1.55rem}
     .sub{color:var(--muted);margin-bottom:12px}
     .panel{background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid var(--border);border-radius:14px;padding:14px}
-    .controls{display:grid;grid-template-columns:170px 1.35fr 1fr 140px 120px 160px auto;gap:10px;align-items:end}
+    .controls{display:grid;grid-template-columns:1fr 140px 120px 160px auto;gap:10px;align-items:end}
     .field label{display:block;color:var(--muted);font-size:.83rem;margin-bottom:6px}
     input,select,textarea{width:100%;background:#0f1529;color:var(--text);border:1px solid #2b3760;border-radius:10px;padding:10px 12px;outline:none}
     input:focus,select:focus,textarea:focus{border-color:#4f6ecf;box-shadow:0 0 0 3px rgba(79,110,207,.25)}
@@ -49,14 +49,12 @@
     .link{color:var(--link);text-decoration:none}.link:hover{text-decoration:underline}
     .muted{color:var(--muted)}
     .error{display:none;margin-top:10px;color:#fecaca;background:#3b1318;border:1px solid #7f1d1d;border-radius:10px;padding:10px;white-space:pre-wrap}
-    .warn{display:none;margin-top:10px;color:#fde68a;background:#3f2e08;border:1px solid #92400e;border-radius:10px;padding:10px}
     .footer{margin-top:10px;color:var(--muted);display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
     .older{margin-top:6px;border:1px solid #2a3558;border-radius:10px;overflow:hidden}
     .older table{min-width:100%;background:#0b1222}
     .older th,.older td{padding:8px 10px;font-size:.9em}
     .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
-    .hidden{display:none!important}
-    @media (max-width:1100px){.controls{grid-template-columns:1fr 1fr 1fr 140px}.summary{grid-template-columns:repeat(4,minmax(0,1fr))}}
+    @media (max-width:1100px){.controls{grid-template-columns:1fr 1fr 140px 140px}.summary{grid-template-columns:repeat(4,minmax(0,1fr))}}
     @media (max-width:700px){.controls,.row{grid-template-columns:1fr}.summary{grid-template-columns:repeat(2,minmax(0,1fr))}}
   </style>
 </head>
@@ -67,17 +65,6 @@
 
   <section class="panel">
     <div class="controls">
-      <div class="field">
-        <label for="mode">Mode</label>
-        <select id="mode">
-          <option value="proxy" selected>Proxy (launcher.py)</option>
-          <option value="direct">Direct (Go Live)</option>
-        </select>
-      </div>
-      <div class="field">
-        <label for="apiBase">API Base URL</label>
-        <input id="apiBase" value="http://127.0.0.1:8765/gitea" />
-      </div>
       <div class="field">
         <label for="uiBase">Gitea UI URL</label>
         <input id="uiBase" value="http://localhost:3000" />
@@ -100,16 +87,6 @@
       </div>
       <button class="btn" id="refreshBtn">Refresh</button>
     </div>
-
-    <div class="field" id="tokenWrap" style="margin-top:10px">
-      <label for="token">Token (Direct mode only)</label>
-      <input id="token" type="password" placeholder="Required only in Direct mode" />
-      <div class="muted" style="font-size:.82rem;margin-top:5px">
-        Proxy mode reads token from <span class="mono">token.txt</span>.
-      </div>
-    </div>
-
-    <div id="modeNote" class="warn"></div>
 
     <div class="row">
       <div class="field">
@@ -154,15 +131,21 @@
 <script>
 (() => {
   const $ = id => document.getElementById(id);
-  const modeEl = $("mode"), apiBaseEl = $("apiBase"), uiBaseEl = $("uiBase"), tokenEl = $("token"),
+  const uiBaseEl = $("uiBase"),
         intervalEl = $("interval"), limitEl = $("limit"), filterEl = $("filter"),
         reposEl = $("repos"), refreshBtn = $("refreshBtn"), discoverBtn = $("discoverBtn"),
         togglePollBtn = $("togglePollBtn"), rowsEl = $("rows"), summaryEl = $("summary"),
-        errorEl = $("error"), lastUpdatedEl = $("lastUpdated"), repoSourceEl = $("repoSource"),
-        tokenWrapEl = $("tokenWrap"), modeNoteEl = $("modeNote");
+        errorEl = $("error"), lastUpdatedEl = $("lastUpdated"), repoSourceEl = $("repoSource");
+
+  // The dashboard is served by launcher.py from the same origin as the proxy,
+  // so a relative path is enough — no need for a configurable API base.
+  const API_BASE = "/gitea";
 
   let polling = true;
   let timer = null;
+  let inFlight = false;
+  let lastRepoRowsAll = [];
+  let lastAllRuns = [];
   const expanded = new Set();
 
   const statusOrder = ["failure","cancelled","in_progress","queued","pending","skipped","success","unknown"];
@@ -178,40 +161,26 @@
   }
 
   function save(){
-    localStorage.setItem("giteaDashExpandV2", JSON.stringify({
-      mode: modeEl.value, apiBase: apiBaseEl.value.trim(), uiBase: uiBaseEl.value.trim(),
-      token: tokenEl.value, interval: intervalEl.value, limit: limitEl.value,
+    localStorage.setItem("giteaDashExpandV3", JSON.stringify({
+      uiBase: uiBaseEl.value.trim(),
+      interval: intervalEl.value, limit: limitEl.value,
       filter: filterEl.value, repos: reposEl.value
     }));
   }
 
   function load(){
-    const raw = localStorage.getItem("giteaDashExpandV2");
+    // Drop legacy V2 entry (used to persist token + mode); ignore silently if absent.
+    try{ localStorage.removeItem("giteaDashExpandV2"); }catch{}
+    const raw = localStorage.getItem("giteaDashExpandV3");
     if(!raw) return;
     try{
       const s = JSON.parse(raw);
-      if(s.mode) modeEl.value = s.mode;
-      if(s.apiBase) apiBaseEl.value = s.apiBase;
       if(s.uiBase) uiBaseEl.value = s.uiBase;
-      if(s.token) tokenEl.value = s.token;
       if(s.interval) intervalEl.value = s.interval;
       if(s.limit) limitEl.value = s.limit;
       if(s.filter) filterEl.value = s.filter;
       if(s.repos) reposEl.value = s.repos;
     }catch{}
-  }
-
-  function updateModeUI(){
-    const proxy = modeEl.value === "proxy";
-    tokenWrapEl.classList.toggle("hidden", proxy);
-    modeNoteEl.style.display = "block";
-    if(proxy){
-      modeNoteEl.textContent = "Proxy mode: API Base should be http://127.0.0.1:8765/gitea";
-      if(!apiBaseEl.value.trim()) apiBaseEl.value = "http://127.0.0.1:8765/gitea";
-    }else{
-      modeNoteEl.textContent = "Direct mode: API Base should be http://localhost:3000. If CORS fails, switch to Proxy mode.";
-      if(!apiBaseEl.value.trim()) apiBaseEl.value = "http://localhost:3000";
-    }
   }
 
   function setError(msg=""){
@@ -220,6 +189,7 @@
   }
 
   function esc(s){ return String(s ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c])); }
+  function safeUrl(u){ const s = String(u ?? ""); return /^https?:\/\//i.test(s) ? s : "#"; }
   function fmtDate(iso){ return iso ? new Date(iso).toLocaleString() : "-"; }
   function normalizeIsoDate(raw){
     if(!raw) return null;
@@ -288,8 +258,8 @@
   }
 
   function headers(){
-    if(modeEl.value === "proxy") return { "Accept":"application/json" };
-    return { "Accept":"application/json", "Authorization":`token ${tokenEl.value.trim()}` };
+    // Token is injected server-side by launcher.py; the browser never sees it.
+    return { "Accept":"application/json" };
   }
 
   async function apiGet(url){
@@ -318,14 +288,18 @@
   }
 
   async function discoverRepos(){
-    const base = apiBaseEl.value.trim().replace(/\/+$/,"");
-    if(modeEl.value === "direct" && !tokenEl.value.trim()) throw new Error("Token required in Direct mode.");
+    const base = API_BASE;
     const repos = [];
-    for(let page=1; page<=20; page++){
-      const data = await apiGet(`${base}/api/v1/user/repos?limit=100&page=${page}`);
-      if(!Array.isArray(data) || !data.length) break;
-      data.forEach(r => { if(r?.full_name) repos.push(r.full_name); });
-      if(data.length < 100) break;
+    try{
+      for(let page=1; page<=20; page++){
+        const data = await apiGet(`${base}/api/v1/user/repos?limit=100&page=${page}`);
+        if(!Array.isArray(data) || !data.length) break;
+        data.forEach(r => { if(r?.full_name) repos.push(r.full_name); });
+        if(data.length < 100) break;
+      }
+    }catch(e){
+      repoSourceEl.textContent = "Repo source: auto-discovery failed";
+      throw e;
     }
     repos.sort((a,b)=>a.localeCompare(b));
     reposEl.value = repos.join("\n");
@@ -429,37 +403,38 @@
       <div class="stat"><div class="k">Cancelled</div><div class="v">${s.cancelled}</div></div>`;
   }
 
+  function olderRowHtml(r){
+    const dur = esc(fmtDuration(r.startedAt, isRunning(r.status) ? null : r.completedAt, r.durationSec));
+    return `<tr>
+      <td>${esc(r.workflowName)} <span class="muted">#${esc(r.id)}</span></td>
+      <td><span class="chip status-${esc(r.status)}"><span class="dot"></span>${esc(r.status)}</span></td>
+      <td>${esc(r.branch)}</td>
+      <td>${esc(r.actor)}</td>
+      <td>${esc(fmtDate(r.startedAt))}</td>
+      <td>${dur}</td>
+      <td><a class="link" target="_blank" rel="noopener" href="${esc(safeUrl(r.htmlUrl))}">Open run ↗</a></td>
+    </tr>`;
+  }
+
   function olderRowsHtml(older){
     if(!older.length) return `<div class="muted" style="padding:8px 2px">No older runs for this workflow.</div>`;
-    return `
-      <div class="older">
-        <table>
-          <thead>
-            <tr>
-              <th>Workflow</th>
-              <th>Status</th>
-              <th>Branch</th>
-              <th>Actor</th>
-              <th>Started</th>
-              <th>Duration</th>
-              <th>Run</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${older.map(r => `
-              <tr>
-                <td>${esc(r.workflowName)} <span class="muted">#${r.id}</span></td>
-                <td><span class="chip status-${r.status}"><span class="dot"></span>${r.status}</span></td>
-                <td>${esc(r.branch)}</td>
-                <td>${esc(r.actor)}</td>
-                <td>${fmtDate(r.startedAt)}</td>
-                <td>${fmtDuration(r.startedAt, isRunning(r.status) ? null : r.completedAt, r.durationSec)}</td>
-                <td><a class="link" target="_blank" rel="noopener" href="${r.htmlUrl}">Open run ↗</a></td>
-              </tr>
-            `).join("")}
-          </tbody>
-        </table>
-      </div>`;
+    const rows = older.map(olderRowHtml).join("");
+    return `<div class="older">
+      <table>
+        <thead>
+          <tr>
+            <th>Workflow</th>
+            <th>Status</th>
+            <th>Branch</th>
+            <th>Actor</th>
+            <th>Started</th>
+            <th>Duration</th>
+            <th>Run</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
   }
 
   function applyRowFilter(repoRows){
@@ -534,8 +509,7 @@
       }
     }
 
-    const base = apiBaseEl.value.trim().replace(/\/+$/,"");
-    const endpoint = await dispatchWorkflow(base, owner, repo, workflowIdentifiers, String(ref).trim(), inputs);
+    const endpoint = await dispatchWorkflow(API_BASE, owner, repo, workflowIdentifiers, String(ref).trim(), inputs);
     return { skipped: false, endpoint };
   }
 
@@ -552,17 +526,17 @@
 
       const main = document.createElement("tr");
       main.innerHTML = `
-        <td>${rr.repo}</td>
-        <td>${esc(rr.latest.workflowName)} <span class="muted">#${rr.latest.id}</span></td>
-        <td><span class="chip status-${rr.latest.status}"><span class="dot"></span>${rr.latest.status}</span></td>
+        <td>${esc(rr.repo)}</td>
+        <td>${esc(rr.latest.workflowName)} <span class="muted">#${esc(rr.latest.id)}</span></td>
+        <td><span class="chip status-${esc(rr.latest.status)}"><span class="dot"></span>${esc(rr.latest.status)}</span></td>
         <td>${esc(rr.latest.branch)}</td>
         <td>${esc(rr.latest.event)}</td>
         <td>${esc(rr.latest.actor)}</td>
-        <td>${fmtDate(rr.latest.startedAt)}</td>
-        <td>${fmtDuration(rr.latest.startedAt, isRunning(rr.latest.status) ? null : rr.latest.completedAt, rr.latest.durationSec)}</td>
-        <td><a class="link" target="_blank" rel="noopener" href="${rr.latest.htmlUrl}">Open run ↗</a></td>
-        <td><button class="btn small" data-trigger="${rr.repo}">Run now</button></td>
-        <td><button class="btn small secondary" data-repo="${rr.repo}" data-eid="exp_${id}">${open ? "Collapse" : `Expand (${rr.older.length})`}</button></td>
+        <td>${esc(fmtDate(rr.latest.startedAt))}</td>
+        <td>${esc(fmtDuration(rr.latest.startedAt, isRunning(rr.latest.status) ? null : rr.latest.completedAt, rr.latest.durationSec))}</td>
+        <td><a class="link" target="_blank" rel="noopener" href="${esc(safeUrl(rr.latest.htmlUrl))}">Open run ↗</a></td>
+        <td><button class="btn small" data-trigger="${esc(rr.repo)}">Run now</button></td>
+        <td><button class="btn small secondary" data-repo="${esc(rr.repo)}" data-eid="exp_${esc(id)}">${open ? "Collapse" : `Expand (${esc(rr.older.length)})`}</button></td>
       `;
       rowsEl.appendChild(main);
 
@@ -621,16 +595,28 @@
     });
   }
 
+  function rerender(){
+    const visible = applyRowFilter(lastRepoRowsAll);
+    renderRepoRows(visible);
+    renderSummary(summarize(lastRepoRowsAll, lastAllRuns));
+    lastUpdatedEl.textContent = `Last updated: ${new Date().toLocaleString()} (${filterEl.value})`;
+  }
+
   async function refresh(){
+    if(inFlight) return;
+    inFlight = true;
     setError("");
     save();
 
-    const base = apiBaseEl.value.trim().replace(/\/+$/,"");
+    const base = API_BASE;
     const uiBase = uiBaseEl.value.trim().replace(/\/+$/,"");
     const limit = parseInt(limitEl.value,10) || 20;
 
-    if(!base || !uiBase) return setError("API Base URL and UI Base URL are required.");
-    if(modeEl.value === "direct" && !tokenEl.value.trim()) return setError("Token required in Direct mode.");
+    if(!uiBase){
+      setError("Gitea UI URL is required.");
+      inFlight = false;
+      return;
+    }
 
     refreshBtn.disabled = true;
     discoverBtn.disabled = true;
@@ -654,12 +640,9 @@
         else errors.push(String(s.reason?.message || s.reason));
       }
 
-      const repoRowsAll = buildRepoRows(allRuns);
-      const repoRowsVisible = applyRowFilter(repoRowsAll);
-
-      renderRepoRows(repoRowsVisible);
-      renderSummary(summarize(repoRowsAll, allRuns));
-      lastUpdatedEl.textContent = `Last updated: ${new Date().toLocaleString()} (${filterEl.value})`;
+      lastAllRuns = allRuns;
+      lastRepoRowsAll = buildRepoRows(allRuns);
+      rerender();
 
       if(errors.length) setError(`Some repositories failed:\n- ${errors.join("\n- ")}`);
     }catch(e){
@@ -667,6 +650,7 @@
     }finally{
       refreshBtn.disabled = false;
       discoverBtn.disabled = false;
+      inFlight = false;
     }
   }
 
@@ -676,12 +660,12 @@
     timer = setInterval(refresh, Math.max(5, parseInt(intervalEl.value,10)||10)*1000);
   }
 
-  [modeEl, apiBaseEl, uiBaseEl, tokenEl, intervalEl, limitEl, filterEl, reposEl].forEach(i => {
+  [uiBaseEl, intervalEl, limitEl, filterEl, reposEl].forEach(i => {
     i.addEventListener("change", () => {
-      if(i===modeEl) updateModeUI();
-      if(i===intervalEl) startPolling();
       save();
-      if(i===filterEl) refresh();
+      if(i===intervalEl) startPolling();
+      // Filter is purely client-side; re-render the cached data instead of re-fetching.
+      if(i===filterEl) rerender();
     });
   });
 
@@ -698,7 +682,6 @@
   });
 
   load();
-  updateModeUI();
   refresh();
   startPolling();
 })();
